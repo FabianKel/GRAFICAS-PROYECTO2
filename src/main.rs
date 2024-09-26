@@ -11,6 +11,7 @@ use minifb::{ Window, WindowOptions, Key };
 use nalgebra_glm::{Vec3, normalize};
 use std::time::Duration;
 use std::f32::consts::PI;
+use std::rc::Rc;
 
 use crate::color::Color;
 use crate::ray_intersect::{Intersect, RayIntersect};
@@ -64,6 +65,7 @@ fn cast_shadow(
     intersect: &Intersect,
     light: &Light,
     objects: &[Cube],
+    camera: &Camera
 ) -> f32 {
     let light_dir = (light.position - intersect.point).normalize();
     let light_distance = (light.position - intersect.point).magnitude();
@@ -72,7 +74,7 @@ fn cast_shadow(
     let mut shadow_intensity = 0.0;
 
     for object in objects {
-        let shadow_intersect = object.ray_intersect(&shadow_ray_origin, &light_dir);
+        let shadow_intersect = object.ray_intersect(&shadow_ray_origin, &light_dir, &camera.eye);
         if shadow_intersect.is_intersecting && shadow_intersect.distance < light_distance {
             let distance_ratio = shadow_intersect.distance / light_distance;
             shadow_intensity = 1.0 - distance_ratio.powf(2.0).min(1.0);
@@ -87,8 +89,9 @@ pub fn cast_ray(
     ray_origin: &Vec3,
     ray_direction: &Vec3,
     objects: &[Cube],
-    light: &Light,
+    lights: &[Light],
     depth: u32,
+    camera: &Camera,
 ) -> Color {
     if depth > 3 {
         return SKYBOX_COLOR;
@@ -98,7 +101,7 @@ pub fn cast_ray(
     let mut zbuffer = f32::INFINITY;
 
     for object in objects {
-        let i = object.ray_intersect(ray_origin, ray_direction);
+        let i = object.ray_intersect(ray_origin, ray_direction,&camera.eye);
         if i.is_intersecting && i.distance < zbuffer {
             zbuffer = i.distance;
             intersect = i;
@@ -109,44 +112,51 @@ pub fn cast_ray(
         return SKYBOX_COLOR;
     }
 
-    let light_dir = (light.position - intersect.point).normalize();
-    let view_dir = (ray_origin - intersect.point).normalize();
-    let reflect_dir = reflect(&-light_dir, &intersect.normal).normalize();
+    let mut final_color = Color::black();
 
-    let shadow_intensity = cast_shadow(&intersect, light, objects);
-    let light_intensity = light.intensity * (1.0 - shadow_intensity);
+    for light in lights {
+        let light_dir = (light.position - intersect.point).normalize();
+        let view_dir = (ray_origin - intersect.point).normalize();
+        let reflect_dir = reflect(&-light_dir, &intersect.normal).normalize();
 
-    let diffuse_intensity = intersect.normal.dot(&light_dir).max(0.0).min(1.0);
-    let diffuse = intersect.material.diffuse * intersect.material.albedo[0] * diffuse_intensity * light_intensity;
+        let shadow_intensity = cast_shadow(&intersect, light, objects, camera);
+        let light_intensity = light.intensity * (1.0 - shadow_intensity);
 
-    let specular_intensity = view_dir.dot(&reflect_dir).max(0.0).powf(intersect.material.specular);
-    let specular = light.color * intersect.material.albedo[1] * specular_intensity * light_intensity;
+        let diffuse_intensity = intersect.normal.dot(&light_dir).max(0.0).min(1.0);
+        let diffuse = intersect.material.diffuse * intersect.material.albedo[0] * diffuse_intensity * light_intensity;
 
-    let mut reflect_color = Color::green();
-    let reflectivity = intersect.material.albedo[2];
-    if reflectivity > 0.0 {
-        let reflect_dir = reflect(&ray_direction, &intersect.normal).normalize();
-        let reflect_origin = offset_origin(&intersect, &reflect_dir);
-        reflect_color = cast_ray(&reflect_origin, &reflect_dir, objects, light, depth + 1);
+        let specular_intensity = view_dir.dot(&reflect_dir).max(0.0).powf(intersect.material.specular);
+        let specular = light.color * intersect.material.albedo[1] * specular_intensity * light_intensity;
+
+        let mut reflect_color = Color::green();
+        let reflectivity = intersect.material.albedo[2];
+        if reflectivity > 0.0 {
+            let reflect_dir = reflect(&ray_direction, &intersect.normal).normalize();
+            let reflect_origin = offset_origin(&intersect, &reflect_dir);
+            reflect_color = cast_ray(&reflect_origin, &reflect_dir, objects, lights, depth + 1, camera);
+        }
+
+        let mut refract_color = Color::green();
+        let transparency = intersect.material.albedo[3];
+        if transparency > 0.0 {
+            let refract_dir = refract(&ray_direction, &intersect.normal, intersect.material.refractive_index);
+            let refract_origin = offset_origin(&intersect, &refract_dir);
+            refract_color = cast_ray(&refract_origin, &refract_dir, objects, lights, depth + 1, camera);
+        }
+
+        final_color = final_color + (diffuse + specular) * (1.0 - reflectivity - transparency)
+            + (reflect_color * reflectivity)
+            + (refract_color * transparency);
     }
 
-
-    let mut refract_color = Color::green();
-    let transparency = intersect.material.albedo[3];
-    if transparency > 0.0 {
-        let refract_dir = refract(&ray_direction, &intersect.normal, intersect.material.refractive_index);
-        let refract_origin = offset_origin(&intersect, &refract_dir);
-        refract_color = cast_ray(&refract_origin, &refract_dir, objects, light, depth + 1);
-    }
-
-    (diffuse + specular) * (1.0 - reflectivity - transparency) + (reflect_color * reflectivity) + (refract_color * transparency)
+    final_color
 }
 
-pub fn render(framebuffer: &mut Framebuffer, objects: &[Cube], camera: &Camera, light: &Light) {
+pub fn render(framebuffer: &mut Framebuffer, objects: &[Cube], camera: &Camera, lights: &[Light]) {
     let width = framebuffer.width as f32;
     let height = framebuffer.height as f32;
     let aspect_ratio = width / height;
-    let fov = PI/3.0;
+    let fov = PI / 3.0;
     let perspective_scale = (fov * 0.5).tan();
 
     for y in 0..framebuffer.height {
@@ -161,13 +171,14 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[Cube], camera: &Camera, 
 
             let rotated_direction = camera.base_change(&ray_direction);
 
-            let pixel_color = cast_ray(&camera.eye, &rotated_direction, objects, light, 0);
+            let pixel_color = cast_ray(&camera.eye, &rotated_direction, objects, lights, 0, camera);
 
             framebuffer.set_current_color(pixel_color.to_hex());
             framebuffer.point(x, y);
         }
     }
 }
+
 
 fn main() {
     let window_width = 800;
@@ -185,74 +196,74 @@ fn main() {
         WindowOptions::default(),
     ).unwrap();
 
-    let grass = Material::new(
-        Color::new(96, 160, 54),
-        50.0,
-        [1.0, 0.1, 0.0, 0.0],
-        0.0,
-    );
+    let grass = Rc::new(
+        Material::new(        
+            Color::new(96, 160, 54),
+            50.0,
+            [1.0, 0.0, 0.0, 0.0],
+            0.0,
+             None,
+    ));
 
-    let water = Material::new(
-        Color::new(10, 40, 225),
-        50.0,
-        [1.0, 0.1, 0.0, 0.0],
-        0.0,
+    let water = Rc::new(
+        Material::new(
+            Color::new(10, 40, 225),
+            50.0,
+            [1.0, 0.1, 0.0, 0.0],
+            0.0,
+            None,
+        )
     );
     
-    let light_absorbing_material = Material::new(
-        Color::new(240, 100, 10),
+    let wood = Rc::new(
+        Material::new(        Color::new(240, 100, 10),
         50.0,
         [0.1, 0.0, 0.0, 0.0],
         50.0,
-    );
+        None,
+    ));
+
+    let cobble_stone = Rc::new(
+        Material::new(        Color::new(155, 155, 155),
+        50.0,
+        [0.1, 0.0, 0.0, 0.0],
+        50.0,
+        None,
+    ));
     
 
     let cube_size = 2.75;
 
     let objects = [
-        //River 3*10
-        Cube {center: Vec3::new(0.0 , 0.0, cube_size * -1.0), dim_x: cube_size * 3.0, dim_y: cube_size, dim_z: cube_size * 10.0, material: water,},
-        //River 2*8
-        Cube {center: Vec3::new(cube_size * 5.0 , 0.0, cube_size * 1.0), dim_x: cube_size * 2.0, dim_y: cube_size, dim_z: cube_size * 8.0, material: water,},
-        //River 1*7
-        Cube {center: Vec3::new(cube_size * 8.0 , 0.0, cube_size * 2.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 7.0, material: water,},
-        //River 1*6
-        Cube {center: Vec3::new(cube_size * -4.0 , 0.0, cube_size * 1.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 6.0, material: water,},
-        //River 1*4
-        Cube {center: Vec3::new(cube_size * -6.0 , 0.0, cube_size * 1.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 4.0, material: water,},
-        //River 1*3
-        Cube {center: Vec3::new(cube_size * -8.0 , 0.0, cube_size * 2.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 3.0, material: water,},
+        //River 2*3
+        Cube {center: Vec3::new(0.0 , -0.6, cube_size * -8.0), dim_x: cube_size * 2.0, dim_y: cube_size - 0.6, dim_z: cube_size * 3.0, material: Rc::clone(&water),},
+        //Lake 7*6
+        Cube {center: Vec3::new(cube_size * 1.0 , -0.6, cube_size * 1.0), dim_x: cube_size * 7.0, dim_y: cube_size - 0.6, dim_z: cube_size * 6.0, material: Rc::clone(&water),},
 
 
         // Floor 4*3
-        Cube {center: Vec3::new(cube_size * -7.0, 0.0, -cube_size * 8.0), dim_x: cube_size * 4.0, dim_y: cube_size, dim_z: cube_size * 3.0, material: grass,},
-        //Floor 3*1
-        Cube {center: Vec3::new(cube_size * -8.0, 0.0, -cube_size * 4.0), dim_x: cube_size * 3.0, dim_y: cube_size, dim_z: cube_size * 1.0, material: grass,},
-        //Floor 2*1
-        Cube {center: Vec3::new(cube_size * -9.0, 0.0, -cube_size * 2.0), dim_x: cube_size * 2.0, dim_y: cube_size, dim_z: cube_size * 1.0, material: grass,},
+        Cube {center: Vec3::new(cube_size * -6.0, 0.0, -cube_size * 8.0), dim_x: cube_size * 4.0, dim_y: cube_size, dim_z: cube_size * 3.0, material: Rc::clone(&grass),},
+        //Floor 2*6
+        Cube {center: Vec3::new(cube_size * -8.0, 0.0, -cube_size * -1.0), dim_x: cube_size * 2.0, dim_y: cube_size, dim_z: cube_size * 6.0, material:  Rc::clone(&grass),},
+        //Floor 10*1
+        Cube {center: Vec3::new(cube_size * 0.0, 0.0, -cube_size * -8.0), dim_x: cube_size * 10.0, dim_y: cube_size, dim_z: cube_size * 1.0, material:  Rc::clone(&grass),},
         //Floor 1*6
-        Cube {center: Vec3::new(cube_size * -10.0, 0.0, -cube_size * -5.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 6.0, material: grass,},
-        //Floor 2*3
-        Cube {center: Vec3::new(cube_size * -7.0, 0.0, -cube_size * -8.0), dim_x: cube_size * 2.0, dim_y: cube_size, dim_z: cube_size * 3.0, material: grass,},
-        //Floor 1*2
-        Cube {center: Vec3::new(cube_size * -4.0, 0.0, -cube_size * -9.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 2.0, material: grass,},
-        //Floor 7*1
-        Cube {center: Vec3::new(cube_size *  4.0, 0.0, -cube_size * -10.0), dim_x: cube_size * 7.0, dim_y: cube_size, dim_z: cube_size * 1.0, material: grass,},
-        //Floor 1*10
-        Cube {center: Vec3::new(cube_size *  10.0, 0.0, -cube_size * 1.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 10.0, material: grass,},
-        //Floor 1*3
-        Cube {center: Vec3::new(cube_size *  8.0, 0.0, -cube_size * 8.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 3.0, material: grass,},
-        //Floor 2*2
-        Cube {center: Vec3::new(cube_size *  5.0, 0.0, -cube_size * 9.0), dim_x: cube_size * 2.0, dim_y: cube_size, dim_z: cube_size * 2.0, material: grass,},
-
-
-        //Floor
-        //Cube {center: Vec3::new(-1.0 * cube_size * 10.0 , 0.0, 0.0), dim_x: cube_size * 9.0, dim_y: cube_size, dim_z: cube_size * 20.0, material: grass,},
+        Cube {center: Vec3::new(cube_size * 9.0, 0.0, -cube_size * -1.0), dim_x: cube_size * 1.0, dim_y: cube_size, dim_z: cube_size * 6.0, material:  Rc::clone(&grass),},
+        //Floor 4*3
+        Cube {center: Vec3::new(cube_size * 6.0, 0.0, -cube_size * 8.0), dim_x: cube_size * 4.0, dim_y: cube_size, dim_z: cube_size * 3.0, material:  Rc::clone(&grass),},
         
-        //Wall 1
-        //Cube {center: Vec3::new(0.0, 2.0, 0.0), dim_x: cube_size * 2.0, dim_y: cube_size, dim_z: cube_size * 10.0, material: light_absorbing_material,}
+
+        //Objetos
+        //Mesa de Crafteo 1*1
+        Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -6.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&wood),},
+        //Horno 1*1
+        Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -4.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&cobble_stone),},
+        //Tronco 1*1*4
+        Cube {center: Vec3::new(cube_size *  -7.0, cube_size * 4.0, -cube_size * 8.0), dim_x: cube_size, dim_y: cube_size * 4.0, dim_z: cube_size, material:  Rc::clone(&wood),},
+
     ];
 
+    
 
     let mut camera = Camera::new(
         Vec3::new(0.0, 0.0, 100.0),
@@ -260,35 +271,74 @@ fn main() {
         Vec3::new(0.0, 1.0, 0.0),
     );
 
-    let light = Light::new(
-        Vec3::new(4.0, 400.0, 2.0),
-        Color::new(255, 255, 255),
-        4.0
+    let sun = Light::new(
+        Vec3::new(0.0, 40.0, 0.0),
+        Color::new(255, 255, 224),
+        2.0,
     );
-
+    
+    let moon = Light::new(
+        Vec3::new(0.0, -40.0, 0.0),
+        Color::new(173, 216, 230),
+        0.5,
+    );
+    // Centro de la órbita
+    let center = Vec3::new(0.0, 0.0, 0.0);
+    let radius = 40.0;
+    let mut angle_sun = 0.0;
+    let mut angle_moon = std::f32::consts::PI;
+    
+    // Simulación de tiempo
+    let delta_time = 0.2;
+    let mut lights: [Light; 2] = [sun, moon];
     let rotation_speed = PI/10.0;
+
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
 
-        if window.is_key_down(Key::Left) {
+        // Actualiza las posiciones del Sol y la Luna
+        lights[0].update_position_orbit(center, radius, angle_sun); // Actualiza el Sol
+        lights[1].update_position_orbit(center, radius, angle_moon); // Actualiza la Luna
+        
+        // Incrementa los ángulos para orbitar
+        angle_sun += delta_time;
+        angle_moon += delta_time;
+        
+        // Para que los ángulos no desborden
+        if angle_sun > 2.0 * std::f32::consts::PI {
+            angle_sun -= 2.0 * std::f32::consts::PI;
+        }
+        if angle_moon > 2.0 * std::f32::consts::PI {
+            angle_moon -= 2.0 * std::f32::consts::PI;
+        }
+
+        lights[0].light_condition();
+
+
+
+        render(&mut framebuffer, &objects, &camera, &lights);
+
+        if window.is_key_down(Key::Left) || window.is_key_down(Key::A) {
             camera.orbit(rotation_speed, 0.0); 
         }
 
-        if window.is_key_down(Key::Right) {
+        if window.is_key_down(Key::Right)||
+        window.is_key_down(Key::D) {
             camera.orbit(-rotation_speed, 0.0);
         }
 
-        if window.is_key_down(Key::Up) {
+        if window.is_key_down(Key::Up)||
+        window.is_key_down(Key::W) {
             camera.orbit(0.0, -rotation_speed);
         }
 
-        if window.is_key_down(Key::Down) {
+        if window.is_key_down(Key::Down)||
+        window.is_key_down(Key::S) {
             camera.orbit(0.0, rotation_speed);
         }
 
-        //render(&mut framebuffer, &objects, &camera, &light);
 
-        render(&mut framebuffer, &objects, &camera, &light);
+        render(&mut framebuffer, &objects, &camera, &lights);
 
         window
             .update_with_buffer(&framebuffer.buffer, framebuffer_width, framebuffer_height)
