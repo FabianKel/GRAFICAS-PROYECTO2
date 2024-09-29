@@ -1,30 +1,38 @@
-// src/texture.rs
+extern crate image;
 
-use image::GenericImageView;
-use crate::Color; // Asumo que tienes una estructura Color
+use image::{DynamicImage, GenericImageView, Pixel, RgbaImage};
 
-// Función para cargar la textura desde una imagen
-pub fn load_texture() -> Vec<Color> {
-    let img = image::open("src/textures/grass1.webp").expect("Failed to load texture");
-    let mut texture: Vec<Color> = Vec::new();
+#[derive(Debug, Clone)]
 
-    for (_, _, pixel) in img.pixels() {
-        let r = pixel[0] as u8;
-        let g = pixel[1] as u8;
-        let b = pixel[2] as u8;
-        texture.push(Color::new(r, g, b));
+pub struct Texture {
+    pub width: u32,
+    pub height: u32,
+    pub data: RgbaImage,  // Almacena la imagen en formato RGBA
+}
+
+impl Texture {
+    // Cargar la textura desde un archivo
+    pub fn from_file(path: &str) -> Result<Self, String> {
+        match image::open(path) {
+            Ok(img) => {
+                let rgba_img = img.to_rgba8();  // Convierte la imagen a RGBA
+                let (width, height) = rgba_img.dimensions();
+
+                Ok(Texture {
+                    width,
+                    height,
+                    data: rgba_img,
+                })
+            }
+            Err(e) => Err(format!("Error loading texture: {}", e)),
+        }
     }
 
-    texture
+    // Obtener el color de un píxel (como un array de 4 valores RGBA)
+    pub fn get_pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        let pixel = self.data.get_pixel(x, y);
+        let channels = pixel.channels();  // Obtén los canales como una referencia al array
+        [channels[0], channels[1], channels[2], channels[3]]  // Convierte la referencia en un array
+    }
+    
 }
-
-// Función para aplicar la textura al floor
-pub fn apply_texture(texture: &[Color], u: f32, v: f32) -> Color {
-    let width = (texture.len() as f32).sqrt() as usize; // Asumimos que la textura es cuadrada
-    let x = (u * (width as f32)).clamp(0.0, width as f32 - 1.0) as usize;
-    let y = (v * (width as f32)).clamp(0.0, width as f32 - 1.0) as usize;
-
-    texture[x + y * width]
-}
-
-

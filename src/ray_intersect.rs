@@ -2,6 +2,8 @@
 use nalgebra_glm::Vec3;
 use crate::material::Material;
 use std::rc::Rc;
+use std::sync::Arc;
+
 
 
 #[derive(Debug, Clone,)]

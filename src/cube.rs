@@ -1,6 +1,8 @@
 use nalgebra_glm::Vec3;
 use crate::ray_intersect::{RayIntersect, Intersect};
 use crate::material::Material;
+use crate::Color;
+use crate::texture::Texture;
 use std::rc::Rc;
 
 pub struct Cube {
@@ -70,16 +72,84 @@ impl RayIntersect for Cube {
 
        // Calcular el punto de intersección y la normal de la cara
        let intersection_point = ray_origin + ray_direction * t_min;
-       let face_normal = self.calculate_normal(&intersection_point, &min, &max);
+       let ( mut normal, face_index) = self.calculate_normal_and_face_index(&intersection_point, &min, &max);
 
        // Verificar si la cara es visible desde la cámara
-       if !self.is_face_visible(&face_normal, camera_position, &intersection_point) {
+       if !self.is_face_visible(&normal, camera_position, &intersection_point) {
            return Intersect::empty();
        }
-
+       let (u, v) = self.get_texture_coordinates(&intersection_point, &min, &max);
        // Si la cara es visible, continuar con el cálculo
        let distance = t_min;
-       Intersect::new(intersection_point, face_normal, distance, Rc::clone(&self.material))
+
+       let texture_color = match &self.material.textures[face_index] {
+        Some(texture) => {
+            let u_clamped = u.clamp(0.0, 1.0 - f32::EPSILON);
+            let v_clamped = v.clamp(0.0, 1.0 - f32::EPSILON);
+    
+            let tex_x = (u_clamped * texture.width as f32) as u32;
+            let tex_y = (v_clamped * texture.height as f32) as u32;
+    
+            let pixel = texture.get_pixel(tex_x, tex_y);
+            Color::new(pixel[0], pixel[1], pixel[2])
+        }
+        None => self.material.diffuse,
+    };
+    
+
+    // Ajustar la normal con el normal map si está disponible
+    if let Some(normal_map) = &self.material.normal_map {
+        let u_clamped = u.clamp(0.0, 1.0 - f32::EPSILON);
+        let v_clamped = v.clamp(0.0, 1.0 - f32::EPSILON);
+
+        let tex_x = (u_clamped * normal_map.width as f32) as u32;
+        let tex_y = (v_clamped * normal_map.height as f32) as u32;
+
+        let pixel = normal_map.get_pixel(tex_x, tex_y);
+
+        let normal_tangent = Vec3::new(
+            (pixel[0] as f32 / 255.0) * 2.0 - 1.0,
+            (pixel[1] as f32 / 255.0) * 2.0 - 1.0,
+            (pixel[2] as f32 / 255.0) * 2.0 - 1.0,
+        )
+        .normalize();
+
+        let tangent = normal.cross(&Vec3::new(0.0, 1.0, 0.0)).normalize();
+        let bitangent = normal.cross(&tangent);
+
+        normal = (tangent * normal_tangent.x
+            + bitangent * normal_tangent.y
+            + normal * normal_tangent.z)
+            .normalize();
+    }
+
+    let albedo = [
+        self.material.albedo[0],
+        self.material.albedo[1],
+        self.material.albedo[2],
+        *self.material.albedo.get(3).unwrap_or(&0.0),
+    ];
+    
+
+    let textures = self.material.textures.clone();
+
+
+    let material = Rc::new(Material::new(
+        texture_color,
+        self.material.specular,
+        albedo,
+        self.material.refractive_index,
+        textures,
+        self.material.normal_map.clone(),
+    ));
+
+    Intersect::new(
+        intersection_point,
+        normal,
+        distance,
+        material
+    )
+
    }
 }
 
@@ -95,24 +165,24 @@ impl Cube {
         dot_product > 0.0
     }
 
-    // Función para calcular la normal en función del punto de intersección
-    fn calculate_normal(&self, point: &Vec3, min: &Vec3, max: &Vec3) -> Vec3 {
+    fn calculate_normal_and_face_index(&self, point: &Vec3, min: &Vec3, max: &Vec3) -> (Vec3, usize) {
         let epsilon = 1e-4;
-        
+    
         if (point.x - min.x).abs() < epsilon {
-            Vec3::new(-1.0, 0.0, 0.0)
+            (Vec3::new(-1.0, 0.0, 0.0), 0)
         } else if (point.x - max.x).abs() < epsilon {
-            Vec3::new(1.0, 0.0, 0.0)
+            (Vec3::new(1.0, 0.0, 0.0), 1)
         } else if (point.y - min.y).abs() < epsilon {
-            Vec3::new(0.0, -1.0, 0.0)
+            (Vec3::new(0.0, -1.0, 0.0), 2)
         } else if (point.y - max.y).abs() < epsilon {
-            Vec3::new(0.0, 1.0, 0.0)
+            (Vec3::new(0.0, 1.0, 0.0), 3)
         } else if (point.z - min.z).abs() < epsilon {
-            Vec3::new(0.0, 0.0, -1.0)
+            (Vec3::new(0.0, 0.0, -1.0), 4)
         } else {
-            Vec3::new(0.0, 0.0, 1.0)
+            (Vec3::new(0.0, 0.0, 1.0), 5)
         }
     }
+    
 
     fn get_texture_coordinates(&self, point: &Vec3, min: &Vec3, max: &Vec3) -> (f32, f32) {
         let epsilon = 1e-4;

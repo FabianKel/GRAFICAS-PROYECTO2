@@ -6,6 +6,7 @@ mod color;
 mod camera;
 mod light;
 mod material;
+mod texture;
 
 use minifb::{ Window, WindowOptions, Key };
 use nalgebra_glm::{Vec3, normalize};
@@ -20,6 +21,7 @@ use crate::framebuffer::Framebuffer;
 use crate::camera::Camera;
 use crate::light::Light;
 use crate::material::Material;
+use crate::texture::Texture;
 
 const ORIGIN_BIAS: f32 = 1e-4;
 const SKYBOX_COLOR: Color = Color::new(68, 142, 228);
@@ -58,6 +60,23 @@ fn refract(incident: &Vec3, normal: &Vec3, eta_t: f32) -> Vec3 {
         reflect(incident, &n_normal)
     } else {
         eta * incident + (eta * n_cosi - k.sqrt()) * n_normal
+    }
+}
+
+fn fresnel(incident: &Vec3, normal: &Vec3, ior: f32) -> f32 {
+    let mut cosi = incident.dot(normal).clamp(-1.0, 1.0);
+    let etai = 1.0;
+    let etat = ior;
+    let sint = etai / etat * (1.0 - cosi * cosi).sqrt();
+
+    if sint >= 1.0 {
+        return 1.0;
+    } else {
+        let cost = (1.0 - sint * sint).sqrt();
+        cosi = cosi.abs();
+        let rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost));
+        let rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost));
+        return (rs * rs + rp * rp) / 2.0;
     }
 }
 
@@ -127,9 +146,10 @@ pub fn cast_ray(
 
         let specular_intensity = view_dir.dot(&reflect_dir).max(0.0).powf(intersect.material.specular);
         let specular = light.color * intersect.material.albedo[1] * specular_intensity * light_intensity;
+        let kr = fresnel(ray_direction, &intersect.normal, intersect.material.refractive_index,);
 
         let mut reflect_color = Color::green();
-        let reflectivity = intersect.material.albedo[2];
+        let reflectivity = kr * intersect.material.albedo[2];
         if reflectivity > 0.0 {
             let reflect_dir = reflect(&ray_direction, &intersect.normal).normalize();
             let reflect_origin = offset_origin(&intersect, &reflect_dir);
@@ -137,7 +157,7 @@ pub fn cast_ray(
         }
 
         let mut refract_color = Color::green();
-        let transparency = intersect.material.albedo[3];
+        let transparency = (1.0 - kr) * intersect.material.albedo[3];
         if transparency > 0.0 {
             let refract_dir = refract(&ray_direction, &intersect.normal, intersect.material.refractive_index);
             let refract_origin = offset_origin(&intersect, &refract_dir);
@@ -181,10 +201,10 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[Cube], camera: &Camera, 
 
 
 fn main() {
-    let window_width = 800;
-    let window_height = 600;
-    let framebuffer_width = 800;
-    let framebuffer_height = 600;
+    let window_width = 400;
+    let window_height = 300;
+    let framebuffer_width = 400;
+    let framebuffer_height = 300;
     let frame_delay = Duration::from_millis(16);
 
     let mut framebuffer = Framebuffer::new(framebuffer_width, framebuffer_height);
@@ -196,13 +216,53 @@ fn main() {
         WindowOptions::default(),
     ).unwrap();
 
+    
+    let grass_textures: [Option<Texture>; 6] = [
+        Texture::from_file("src/textures/grass_top.png").ok(),
+        Texture::from_file("src/textures/grass_top.png").ok(),
+        Texture::from_file("src/textures/grass_top.png").ok(),
+        Texture::from_file("src/textures/grass_top.png").ok(),
+        Texture::from_file("src/textures/grass_top.png").ok(),
+        Texture::from_file("src/textures/grass_top.png").ok(),
+    ];
+
+    let water_textures: [Option<Texture>; 6] = [
+        Texture::from_file("src/textures/water.png").ok(),
+        Texture::from_file("src/textures/water.png").ok(),
+        Texture::from_file("src/textures/water.png").ok(),
+        Texture::from_file("src/textures/water.png").ok(),
+        Texture::from_file("src/textures/water.png").ok(),
+        Texture::from_file("src/textures/water.png").ok(),
+    ];
+
+    let wood_textures: [Option<Texture>; 6] = [
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+    ];
+
+    let furnace_textures: [Option<Texture>; 6] = [
+        Texture::from_file("src/textures/furnace_front.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+
+    ];
+
+
     let grass = Rc::new(
         Material::new(        
             Color::new(96, 160, 54),
             50.0,
             [1.0, 0.0, 0.0, 0.0],
             0.0,
-             None,
+            grass_textures,
+            None,
     ));
 
     let water = Rc::new(
@@ -211,23 +271,28 @@ fn main() {
             50.0,
             [1.0, 0.1, 0.0, 0.0],
             0.0,
+            water_textures,
             None,
         )
     );
     
     let wood = Rc::new(
-        Material::new(        Color::new(240, 100, 10),
+        Material::new(    
+            Color::new(10, 40, 225),
         50.0,
-        [0.1, 0.0, 0.0, 0.0],
-        50.0,
+        [0.1, 0.1, 0.0, 0.0],
+        0.0,
+        wood_textures,
         None,
     ));
 
-    let cobble_stone = Rc::new(
-        Material::new(        Color::new(155, 155, 155),
+    let furnace = Rc::new(
+        Material::new(        
+        Color::new(10, 40, 225),
         50.0,
-        [0.1, 0.0, 0.0, 0.0],
-        50.0,
+        [0.1, 0.1, 0.0, 0.0],
+        0.0,
+        furnace_textures,
         None,
     ));
     
@@ -257,7 +322,7 @@ fn main() {
         //Mesa de Crafteo 1*1
         Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -6.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&wood),},
         //Horno 1*1
-        Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -4.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&cobble_stone),},
+        Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -4.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&furnace),},
         //Tronco 1*1*4
         Cube {center: Vec3::new(cube_size *  -7.0, cube_size * 4.0, -cube_size * 8.0), dim_x: cube_size, dim_y: cube_size * 4.0, dim_z: cube_size, material:  Rc::clone(&wood),},
 
