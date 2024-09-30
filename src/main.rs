@@ -201,10 +201,10 @@ pub fn render(framebuffer: &mut Framebuffer, objects: &[Cube], camera: &Camera, 
 
 
 fn main() {
-    let window_width = 400;
-    let window_height = 300;
-    let framebuffer_width = 400;
-    let framebuffer_height = 300;
+    let window_width = 800;
+    let window_height = 600;
+    let framebuffer_width = 800;
+    let framebuffer_height = 600;
     let frame_delay = Duration::from_millis(16);
 
     let mut framebuffer = Framebuffer::new(framebuffer_width, framebuffer_height);
@@ -245,15 +245,31 @@ fn main() {
     ];
 
     let furnace_textures: [Option<Texture>; 6] = [
+        Texture::from_file("src/textures/furnace_side.png").ok(),
         Texture::from_file("src/textures/furnace_front.png").ok(),
+        Texture::from_file("src/textures/furnace_side.png").ok(),
+        Texture::from_file("src/textures/furnace_top.png").ok(),
+        Texture::from_file("src/textures/furnace_side.png").ok(),
         Texture::from_file("src/textures/wood.png").ok(),
-        Texture::from_file("src/textures/wood.png").ok(),
-        Texture::from_file("src/textures/wood.png").ok(),
-        Texture::from_file("src/textures/wood.png").ok(),
-        Texture::from_file("src/textures/wood.png").ok(),
-
     ];
 
+    let craft_textures: [Option<Texture>; 6] = [
+        Texture::from_file("src/textures/crafting_table_side2.png").ok(),
+        Texture::from_file("src/textures/crafting_table_side2.png").ok(),
+        Texture::from_file("src/textures/furnace_side.png").ok(),
+        Texture::from_file("src/textures/crafting_table_top.png").ok(),
+        Texture::from_file("src/textures/crafting_table_side1.png").ok(),
+        Texture::from_file("src/textures/wood.png").ok(),
+    ];
+
+    let leaf_textures: [Option<Texture>; 6] = [
+        Texture::from_file("src/textures/leaf.png").ok(),
+        Texture::from_file("src/textures/leaf.png").ok(),
+        Texture::from_file("src/textures/leaf.png").ok(),
+        Texture::from_file("src/textures/leaf.png").ok(),
+        Texture::from_file("src/textures/leaf.png").ok(),
+        Texture::from_file("src/textures/leaf.png").ok(),
+    ];
 
     let grass = Rc::new(
         Material::new(        
@@ -278,9 +294,9 @@ fn main() {
     
     let wood = Rc::new(
         Material::new(    
-            Color::new(10, 40, 225),
+        Color::new(10, 40, 225),
         50.0,
-        [0.1, 0.1, 0.0, 0.0],
+        [0.6, 0.3, 0.0, 0.0],        
         0.0,
         wood_textures,
         None,
@@ -290,9 +306,29 @@ fn main() {
         Material::new(        
         Color::new(10, 40, 225),
         50.0,
-        [0.1, 0.1, 0.0, 0.0],
+        [0.6, 0.3, 0.0, 0.0],        
         0.0,
         furnace_textures,
+        None,
+    ));
+
+    let crafting_table = Rc::new(
+        Material::new(        
+        Color::new(10, 40, 225),
+        50.0,
+        [0.6, 0.3, 0.0, 0.0],        
+        0.0,
+        craft_textures,
+        None,
+    ));
+
+    let leaf = Rc::new(
+        Material::new(        
+        Color::new(10, 40, 225),
+        50.0,
+        [0.8, 0.2, 0.0, 0.0],        
+        0.0,
+        leaf_textures,
         None,
     ));
     
@@ -320,12 +356,14 @@ fn main() {
 
         //Objetos
         //Mesa de Crafteo 1*1
-        Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -6.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&wood),},
+        Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -6.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&crafting_table),},
         //Horno 1*1
         Cube {center: Vec3::new(cube_size *  -9.0, cube_size * 2.0, -cube_size * -4.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&furnace),},
         //Tronco 1*1*4
         Cube {center: Vec3::new(cube_size *  -7.0, cube_size * 4.0, -cube_size * 8.0), dim_x: cube_size, dim_y: cube_size * 4.0, dim_z: cube_size, material:  Rc::clone(&wood),},
-
+        //Hojas 3*1*3
+        Cube {center: Vec3::new(cube_size *  -7.0, cube_size * 9.0, -cube_size * 8.0), dim_x: cube_size * 3.0, dim_y: cube_size, dim_z: cube_size * 3.0, material:  Rc::clone(&leaf),},
+        Cube {center: Vec3::new(cube_size *  -7.0, cube_size * 11.0, -cube_size * 8.0), dim_x: cube_size, dim_y: cube_size, dim_z: cube_size, material:  Rc::clone(&leaf),},
     ];
 
     
